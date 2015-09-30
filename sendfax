@@ -1,0 +1,97 @@
+#!/usr/bin/perl
+
+# Copyright (c) 2015 Todd T. Fries <todd@freedaemon.com>
+#
+# Permission to use, copy, modify, and distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+use strict;
+use warnings;
+
+use SOAP::Lite;
+use MIME::Base64;
+use Getopt::Std;
+
+our $opt_c;  # config file
+our $opt_f;  # file to send
+our $opt_n;  # fax number(destination)
+getopts('c:f:n:');
+
+my $conf;
+if (defined($opt_c) && -f $opt_c) {
+	$conf = $opt_c;
+} else {
+	$conf = $ENV{'HOME'}."/.interfax.conf";
+}
+if (!defined($opt_f)) {
+	die "'-f <filename>' is a required arg";
+}
+if (!defined($opt_n)) {
+	die "'-n <faxno>' is a required arg";
+}
+my %config;
+if (-f $conf) {
+	open(FH, $conf);
+	my $line;
+	while (<FH>) {
+		chomp($line = $_);
+		my ($lhs,$rhs) = split(/\s*=\s*/,$line);
+		$config{$lhs}=$rhs;
+	}
+	close(FH);
+}
+
+my $username  = $config{'user'}; # Enter your Interfax username here
+my $password  = $config{'pass'}; # Enter your Interfax password here
+# Enter the destination fax number here in the format:
+# +[country code][area code][fax number] for example: +1212555487
+my $faxNumber = $opt_n; 
+my $filename  = $opt_f;
+
+# XXX auto detect
+my $filetype  = 'pdf';
+my $NS = 'http://www.interfax.cc';
+
+#  Read file as binary in 1K blocks
+my ($file, $data);
+open FILE, $filename;
+while (read FILE, $data, 1024 != 0) {
+    $file .= $data;
+}
+close FILE;
+$file = encode_base64($file);
+
+my $client = SOAP::Lite
+	->uri($NS)
+	->on_action( sub { join '/', $NS, $_[1] } ) 
+	->proxy('https://ws.interfax.net/dfs.asmx?wsdl');
+	
+my $result = $client
+	->call(SOAP::Data->name('Sendfax')->attr({xmlns => $NS}) =>
+                    SOAP::Data->name('Username')->value($username)->type(''),
+		    SOAP::Data->name('Password')->value($password)->type(''),
+		    SOAP::Data->name('FaxNumber')->value($faxNumber)->type(''),
+		    SOAP::Data->name('FileData')->value($file)->type(''),
+		    SOAP::Data->name('FileType')->value($filetype)->type('')
+	);
+
+print "result is a ".ref($result)."\n";
+
+if ( $result->fault ) {
+    print $result->faultstring . "\n";
+} else {
+	if( $result->valueof('//SendfaxResult') > 0 ) {
+		print "Success. TransactionID=" . $result->valueof('//SendfaxResult') . "\n";
+	} else {
+		print "Error, return code=" . $result->valueof('//SendfaxResult') . "\n";
+	}
+}
